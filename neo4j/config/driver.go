@@ -52,7 +52,6 @@ type Config struct {
 	// This is considered an advanced setting, use it at your own risk.
 	// Introduced in 5.0.
 	TlsConfig *tls.Config
-
 	// Logging target the driver will send its log outputs
 	//
 	// Possible to use custom logger (implement log.Logger interface) or
@@ -146,6 +145,16 @@ type Config struct {
 	// By default, the server's settings are used.
 	// Disabling categories allows the server to skip analysis for those, which can speed up query execution.
 	NotificationsDisabledCategories notifications.NotificationDisabledCategories
+	// Whether to enable telemetry tracking.
+	//
+	// default: true
+	TelemetryEnabled bool
+	// Maximum telemetry measurements before cache is full.
+	// Once full, we send a telemetry message and clear the cache.
+	// A value of 0 disables the cache, sending a telemetry message per measurement.
+	//
+	// default: telemetry.DefaultCacheSize
+	TelemetryCacheSize uint64
 }
 
 // ServerAddressResolver is a function type that defines the resolver function used by the routing driver to

@@ -27,6 +27,7 @@ import (
 	idb "github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/db"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/errorutil"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/racing"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/telemetry"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/log"
 	"net/url"
 	"strings"
@@ -221,6 +222,13 @@ func NewDriverWithContext(target string, auth auth.TokenManager, configurers ...
 		d.log = &log.Void{}
 	}
 	d.logId = log.NewId()
+
+	// Setup telemetry
+	if d.config.TelemetryEnabled {
+		_ = telemetry.New(d.config.TelemetryCacheSize)
+		// TODO store this in a config and pass down the chain
+		// something like d.config.telemetry = _
+	}
 
 	routingContext, err := routingContextFromUrl(routing, parsed)
 	if err != nil {
@@ -518,6 +526,8 @@ func ExecuteQuery[T any](
 	parameters map[string]any,
 	newResultTransformer func() ResultTransformer[T],
 	settings ...ExecuteQueryConfigurationOption) (res T, err error) {
+
+	telemetry.Track(telemetry.ApiTypeExecuteQuery)
 
 	if driver == nil {
 		return *new(T), &UsageError{Message: "nil is not a valid DriverWithContext argument."}

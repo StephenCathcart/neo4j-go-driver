@@ -26,6 +26,7 @@ import (
 	idb "github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/db"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/errorutil"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/pool"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/telemetry"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/notifications"
 	"math"
 	"time"
@@ -284,6 +285,9 @@ func (s *sessionWithContext) LastBookmarks() Bookmarks {
 }
 
 func (s *sessionWithContext) BeginTransaction(ctx context.Context, configurers ...func(*TransactionConfig)) (ExplicitTransaction, error) {
+
+	telemetry.Track(telemetry.ApiTypeUnmanaged)
+
 	// Guard for more than one transaction per session
 	if s.explicitTx != nil {
 		err := &UsageError{Message: "Session already has a pending transaction"}
@@ -356,11 +360,15 @@ func (s *sessionWithContext) BeginTransaction(ctx context.Context, configurers .
 func (s *sessionWithContext) ExecuteRead(ctx context.Context,
 	work ManagedTransactionWork, configurers ...func(*TransactionConfig)) (any, error) {
 
+	telemetry.Track(telemetry.ApiTypeManaged)
+
 	return s.runRetriable(ctx, idb.ReadMode, work, configurers...)
 }
 
 func (s *sessionWithContext) ExecuteWrite(ctx context.Context,
 	work ManagedTransactionWork, configurers ...func(*TransactionConfig)) (any, error) {
+
+	telemetry.Track(telemetry.ApiTypeManaged)
 
 	return s.runRetriable(ctx, idb.WriteMode, work, configurers...)
 }
@@ -568,6 +576,8 @@ func (s *sessionWithContext) retrieveSessionBookmarks(conn idb.Connection) {
 
 func (s *sessionWithContext) Run(ctx context.Context,
 	cypher string, params map[string]any, configurers ...func(*TransactionConfig)) (ResultWithContext, error) {
+
+	telemetry.Track(telemetry.ApiTypeRun)
 
 	if s.explicitTx != nil {
 		err := &UsageError{Message: "Trying to run auto-commit transaction while in explicit transaction"}

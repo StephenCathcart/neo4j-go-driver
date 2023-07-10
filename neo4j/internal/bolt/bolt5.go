@@ -1079,6 +1079,10 @@ func (b *bolt5) resetResponseHandler() responseHandler {
 	}
 }
 
+func (b *bolt5) telemetryResponseHandler() responseHandler {
+	return b.expectedSuccessHandler(onSuccessNoOp)
+}
+
 func (b *bolt5) expectedSuccessHandler(onSuccess func(*success)) responseHandler {
 	return responseHandler{
 		onSuccess: onSuccess,

@@ -246,6 +246,16 @@ func (o *outgoing) appendGoodbye() {
 	o.end()
 }
 
+func (o *outgoing) appendTelemetry(telemetry map[string]any) {
+	if o.boltLogger != nil {
+		o.boltLogger.LogClientMessage(o.logId, "TELEMETRY %s", loggableDictionary(telemetry))
+	}
+	o.begin()
+	o.packer.StructHeader(byte(msgTelemetry), 1)
+	o.packMap(telemetry)
+	o.end()
+}
+
 // For tests
 func (o *outgoing) appendX(tag byte, fields ...any) {
 	o.begin()

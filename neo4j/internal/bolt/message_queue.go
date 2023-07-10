@@ -130,8 +130,15 @@ func (q *messageQueue) appendGoodbye() {
 	// no response expected here
 }
 
+func (q *messageQueue) appendTelemetry(telemetry map[string]any, telemetryHandler responseHandler) {
+	q.out.appendTelemetry(telemetry)
+	q.enqueueCallback(telemetryHandler)
+}
+
 func (q *messageQueue) send(ctx context.Context) {
 	q.out.send(ctx, q.targetConnection)
+
+	// TODO this could be a good place to send telemetry
 }
 
 func (q *messageQueue) receiveAll(ctx context.Context) error {

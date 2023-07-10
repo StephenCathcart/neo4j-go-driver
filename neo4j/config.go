@@ -21,6 +21,7 @@ package neo4j
 
 import (
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/config"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j/internal/telemetry"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/notifications"
 	"math"
 	"net/url"
@@ -50,6 +51,8 @@ func defaultConfig() *Config {
 		FetchSize:                       FetchDefault,
 		NotificationsMinSeverity:        notifications.DefaultLevel,
 		NotificationsDisabledCategories: notifications.NotificationDisabledCategories{},
+		TelemetryEnabled:                true,
+		TelemetryCacheSize:              telemetry.DefaultCacheSize,
 	}
 }
 
