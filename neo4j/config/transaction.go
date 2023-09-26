@@ -8,28 +8,28 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      https://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
-package neo4j
+package config
 
-import (
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j/config"
-	"time"
-)
+import "time"
 
 // TransactionConfig holds the settings for explicit and auto-commit transactions. Actual configuration is expected
 // to be done using configuration functions that are predefined, i.e. 'WithTxTimeout' and 'WithTxMetadata', or one
 // that you could write by your own.
-//
-// Deprecated: please use config.TransactionConfig directly. This alias will be removed in 6.0.
-type TransactionConfig = config.TransactionConfig
+type TransactionConfig struct {
+	// Timeout is the configured transaction timeout.
+	Timeout time.Duration
+	// Metadata is the configured transaction metadata that will be attached to the underlying transaction.
+	Metadata map[string]any
+}
 
 // WithTxTimeout returns a transaction configuration function that applies a timeout to a transaction.
 //
@@ -48,10 +48,10 @@ type TransactionConfig = config.TransactionConfig
 // To apply a transaction timeout to a write transaction function:
 //
 //	session.ExecuteWrite(DoWork, WithTxTimeout(5*time.Second))
-//
-// Deprecated: please use config.WithTxTimeout directly. This delegate will be removed in 6.0.
 func WithTxTimeout(timeout time.Duration) func(*TransactionConfig) {
-	return config.WithTxTimeout(timeout)
+	return func(config *TransactionConfig) {
+		config.Timeout = timeout
+	}
 }
 
 // WithTxMetadata returns a transaction configuration function that attaches metadata to a transaction.
@@ -71,8 +71,8 @@ func WithTxTimeout(timeout time.Duration) func(*TransactionConfig) {
 // To attach a metadata to a write transaction function:
 //
 //	session.ExecuteWrite(DoWork, WithTxMetadata(map[string)any{"work-id": 1}))
-//
-// Deprecated: please use config.WithTxMetadata directly. This delegate will be removed in 6.0.
 func WithTxMetadata(metadata map[string]any) func(*TransactionConfig) {
-	return config.WithTxMetadata(metadata)
+	return func(config *TransactionConfig) {
+		config.Metadata = metadata
+	}
 }
