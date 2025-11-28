@@ -31,6 +31,7 @@ import (
 	"github.com/neo4j/neo4j-go-driver/v6/neo4j/internal/collections"
 	idb "github.com/neo4j/neo4j-go-driver/v6/neo4j/internal/db"
 	"github.com/neo4j/neo4j-go-driver/v6/neo4j/internal/errorutil"
+	"github.com/neo4j/neo4j-go-driver/v6/neo4j/internal/observability"
 	"github.com/neo4j/neo4j-go-driver/v6/neo4j/internal/retry"
 	"github.com/neo4j/neo4j-go-driver/v6/neo4j/internal/telemetry"
 	"github.com/neo4j/neo4j-go-driver/v6/neo4j/log"
@@ -322,11 +323,23 @@ func (s *session) BeginTransaction(ctx context.Context, configurers ...func(*Tra
 		return nil, err
 	}
 
+	// Determine access mode string for span
+	accessMode := "read"
+	if s.defaultMode == idb.WriteMode {
+		accessMode = "write"
+	}
+
+	ctx, span := observability.StartBeginTransactionSpan(ctx, s.config.DatabaseName, accessMode)
+
 	// Get a connection from the pool. This could fail in clustered environment.
 	conn, err := s.getConnection(ctx, s.defaultMode, s.driverConfig.ConnectionLivenessCheckTimeout)
 	if err != nil {
+		observability.RecordError(span, err)
+		span.End()
 		return nil, errorutil.WrapError(err)
 	}
+
+	observability.SetServer(span, conn.ServerName())
 
 	if !s.driverConfig.TelemetryDisabled {
 		conn.Telemetry(telemetry.UnmanagedTransaction, nil)
@@ -335,6 +348,8 @@ func (s *session) BeginTransaction(ctx context.Context, configurers ...func(*Tra
 	beginBookmarks, err := s.getBookmarks(ctx)
 	if err != nil {
 		s.pool.Return(ctx, conn)
+		observability.RecordError(span, err)
+		span.End()
 		return nil, errorutil.WrapError(err)
 	}
 	txHandle, err := conn.TxBegin(ctx,
@@ -352,16 +367,23 @@ func (s *session) BeginTransaction(ctx context.Context, configurers ...func(*Tra
 		}, true)
 	if err != nil {
 		s.pool.Return(ctx, conn)
+		observability.RecordError(span, err)
+		span.End()
 		return nil, errorutil.WrapError(err)
 	}
 
-	// Create transaction wrapper
+	// Create transaction wrapper with span context
 	txState := &transactionState{}
+	spanEnd := func() {
+		span.End()
+	}
 	tx := &explicitTransaction{
 		conn:      conn,
 		fetchSize: s.fetchSize,
 		txHandle:  txHandle,
 		txState:   txState,
+		spanEnd:   spanEnd,
+		txCtx:     ctx, // Store context with span for child operations
 	}
 
 	onClose := func() {
@@ -374,6 +396,11 @@ func (s *session) BeginTransaction(ctx context.Context, configurers ...func(*Tra
 		tx.txState.err = errorutil.CombineAllErrors(tx.txState.err, bookmarkErr)
 		tx.conn = nil
 		s.explicitTx = nil
+		// End the BeginTransaction span if not already ended
+		if tx.spanEnd != nil {
+			tx.spanEnd()
+			tx.spanEnd = nil
+		}
 	}
 	tx.onClosed = onClose
 	txState.resultErrorHandlers = append(txState.resultErrorHandlers, func(error) { onClose() })
@@ -386,25 +413,57 @@ func (s *session) BeginTransaction(ctx context.Context, configurers ...func(*Tra
 func (s *session) ExecuteRead(ctx context.Context,
 	work ManagedTransactionWork, configurers ...func(*TransactionConfig)) (any, error) {
 
-	return s.runRetriable(ctx, idb.ReadMode, work, true, telemetry.ManagedTransaction, configurers...)
+	ctx, span := observability.StartExecuteReadSpan(ctx, s.config.DatabaseName)
+	defer span.End()
+
+	result, err := s.runRetriable(ctx, idb.ReadMode, work, true, telemetry.ManagedTransaction, configurers...)
+	if err != nil {
+		observability.RecordError(span, err)
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *session) ExecuteWrite(ctx context.Context,
 	work ManagedTransactionWork, configurers ...func(*TransactionConfig)) (any, error) {
 
-	return s.runRetriable(ctx, idb.WriteMode, work, true, telemetry.ManagedTransaction, configurers...)
+	ctx, span := observability.StartExecuteWriteSpan(ctx, s.config.DatabaseName)
+	defer span.End()
+
+	result, err := s.runRetriable(ctx, idb.WriteMode, work, true, telemetry.ManagedTransaction, configurers...)
+	if err != nil {
+		observability.RecordError(span, err)
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *session) executeQueryRead(ctx context.Context,
 	work ManagedTransactionWork, configurers ...func(*TransactionConfig)) (any, error) {
 
-	return s.runRetriable(ctx, idb.ReadMode, work, false, telemetry.ExecuteQuery, configurers...)
+	ctx, span := observability.StartExecuteReadSpan(ctx, s.config.DatabaseName)
+	defer span.End()
+
+	result, err := s.runRetriable(ctx, idb.ReadMode, work, false, telemetry.ExecuteQuery, configurers...)
+	if err != nil {
+		observability.RecordError(span, err)
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *session) executeQueryWrite(ctx context.Context,
 	work ManagedTransactionWork, configurers ...func(*TransactionConfig)) (any, error) {
 
-	return s.runRetriable(ctx, idb.WriteMode, work, false, telemetry.ExecuteQuery, configurers...)
+	ctx, span := observability.StartExecuteWriteSpan(ctx, s.config.DatabaseName)
+	defer span.End()
+
+	result, err := s.runRetriable(ctx, idb.WriteMode, work, false, telemetry.ExecuteQuery, configurers...)
+	if err != nil {
+		observability.RecordError(span, err)
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *session) runRetriable(
@@ -451,8 +510,14 @@ func (s *session) runRetriable(
 	}
 	for state.Continue(ctx) {
 		if hasCompleted, result := s.executeTransactionFunction(ctx, mode, config, &state, work, blockingTxBegin, api); hasCompleted {
+			// Update retry count on span if retries occurred
+			if len(state.Errs) > 0 {
+				observability.UpdateRetryCountFromContext(ctx, len(state.Errs))
+			}
 			return result, nil
 		}
+		// Update retry count as we retry
+		observability.UpdateRetryCountFromContext(ctx, len(state.Errs))
 	}
 
 	err := state.ProduceError()
@@ -510,7 +575,13 @@ func (s *session) executeTransactionFunction(
 		return false, nil
 	}
 
-	tx := managedTransaction{conn: conn, fetchSize: s.fetchSize, txHandle: txHandle, txState: &transactionState{}}
+	tx := managedTransaction{
+		conn:      conn,
+		fetchSize: s.fetchSize,
+		txHandle:  txHandle,
+		txState:   &transactionState{},
+		txCtx:     ctx, // Store context with ExecuteRead/ExecuteWrite span for child operations
+	}
 	x, err := work(&tx)
 	if err != nil {
 		// If the client returns a client specific error that means that
@@ -728,10 +799,22 @@ func (s *session) Run(ctx context.Context,
 		return nil, err
 	}
 
+	// Determine access mode string for span
+	accessMode := "read"
+	if s.defaultMode == idb.WriteMode {
+		accessMode = "write"
+	}
+
+	ctx, span := observability.StartRunSpan(ctx, s.config.DatabaseName, cypher, accessMode)
+	defer span.End()
+
 	conn, err := s.getConnection(ctx, s.defaultMode, s.driverConfig.ConnectionLivenessCheckTimeout)
 	if err != nil {
+		observability.RecordError(span, err)
 		return nil, errorutil.WrapError(err)
 	}
+
+	observability.SetServer(span, conn.ServerName())
 
 	if !s.driverConfig.TelemetryDisabled {
 		conn.Telemetry(telemetry.AutoCommitTransaction, nil)
@@ -740,6 +823,7 @@ func (s *session) Run(ctx context.Context,
 	runBookmarks, err := s.getBookmarks(ctx)
 	if err != nil {
 		s.pool.Return(ctx, conn)
+		observability.RecordError(span, err)
 		return nil, errorutil.WrapError(err)
 	}
 	stream, err := conn.Run(
@@ -764,6 +848,7 @@ func (s *session) Run(ctx context.Context,
 	)
 	if err != nil {
 		s.pool.Return(ctx, conn)
+		observability.RecordError(span, err)
 		return nil, errorutil.WrapError(err)
 	}
 

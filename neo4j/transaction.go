@@ -22,6 +22,7 @@ import (
 
 	"github.com/neo4j/neo4j-go-driver/v6/neo4j/internal/db"
 	"github.com/neo4j/neo4j-go-driver/v6/neo4j/internal/errorutil"
+	"github.com/neo4j/neo4j-go-driver/v6/neo4j/internal/observability"
 )
 
 // ManagedTransaction represents a transaction managed by the driver and operated on by the user, via transaction functions
@@ -66,14 +67,25 @@ type explicitTransaction struct {
 	txHandle  db.TxHandle
 	txState   *transactionState
 	onClosed  func()
+	spanEnd   func()          // function to end the BeginTransaction span
+	txCtx     context.Context // context with the transaction span for child operations
 }
 
 func (tx *explicitTransaction) Run(ctx context.Context, cypher string, params map[string]any) (Result, error) {
 	if tx.conn == nil {
 		return nil, transactionAlreadyCompletedError()
 	}
+	// Use transaction context for span creation if available, otherwise use provided context
+	spanCtx := ctx
+	if tx.txCtx != nil {
+		spanCtx = tx.txCtx
+	}
+	_, span := observability.StartTransactionRunSpan(spanCtx, cypher, tx.conn.ServerName())
+	defer span.End()
+
 	stream, err := tx.conn.RunTx(ctx, tx.txHandle, db.Command{Cypher: cypher, Params: params, FetchSize: tx.fetchSize})
 	if err != nil {
+		observability.RecordError(span, err)
 		tx.txState.onError(err)
 		return nil, errorutil.WrapError(tx.txState.err)
 	}
@@ -90,7 +102,23 @@ func (tx *explicitTransaction) Commit(ctx context.Context) error {
 	if tx.conn == nil {
 		return transactionAlreadyCompletedError()
 	}
+	// Use transaction context for span creation if available
+	spanCtx := ctx
+	if tx.txCtx != nil {
+		spanCtx = tx.txCtx
+	}
+	_, span := observability.StartTransactionCommitSpan(spanCtx, tx.conn.ServerName())
+	defer span.End()
+
 	tx.txState.err = tx.conn.TxCommit(ctx, tx.txHandle)
+	if tx.txState.err != nil {
+		observability.RecordError(span, tx.txState.err)
+	}
+	// End the BeginTransaction span
+	if tx.spanEnd != nil {
+		tx.spanEnd()
+		tx.spanEnd = nil
+	}
 	tx.onClosed()
 	return errorutil.WrapError(tx.txState.err)
 }
@@ -110,11 +138,27 @@ func (tx *explicitTransaction) Rollback(ctx context.Context) error {
 	if tx.conn == nil {
 		return transactionAlreadyCompletedError()
 	}
+	// Use transaction context for span creation if available
+	spanCtx := ctx
+	if tx.txCtx != nil {
+		spanCtx = tx.txCtx
+	}
+	_, span := observability.StartTransactionRollbackSpan(spanCtx, tx.conn.ServerName())
+	defer span.End()
+
 	if !tx.conn.IsAlive() || tx.conn.HasFailed() {
 		// tx implicitly rolled back by having failed
 		tx.txState.err = nil
 	} else {
 		tx.txState.err = tx.conn.TxRollback(ctx, tx.txHandle)
+		if tx.txState.err != nil {
+			observability.RecordError(span, tx.txState.err)
+		}
+	}
+	// End the BeginTransaction span
+	if tx.spanEnd != nil {
+		tx.spanEnd()
+		tx.spanEnd = nil
 	}
 	tx.onClosed()
 	return errorutil.WrapError(tx.txState.err)
@@ -126,11 +170,22 @@ type managedTransaction struct {
 	fetchSize int
 	txHandle  db.TxHandle
 	txState   *transactionState
+	txCtx     context.Context // context with parent span (ExecuteRead/ExecuteWrite) for child operations
 }
 
 func (tx *managedTransaction) Run(ctx context.Context, cypher string, params map[string]any) (Result, error) {
+	// Use the stored context (with ExecuteRead/ExecuteWrite span) for creating child spans
+	// This ensures proper parent-child relationship in the trace hierarchy
+	spanCtx := ctx
+	if tx.txCtx != nil {
+		spanCtx = tx.txCtx
+	}
+	_, span := observability.StartTransactionRunSpan(spanCtx, cypher, tx.conn.ServerName())
+	defer span.End()
+
 	stream, err := tx.conn.RunTx(ctx, tx.txHandle, db.Command{Cypher: cypher, Params: params, FetchSize: tx.fetchSize})
 	if err != nil {
+		observability.RecordError(span, err)
 		return nil, errorutil.WrapError(err)
 	}
 	// no result consumption hook here since bookmarks are sent after commit, not after pulling results
