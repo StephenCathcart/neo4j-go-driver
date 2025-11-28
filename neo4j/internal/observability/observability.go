@@ -24,6 +24,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const (
@@ -53,7 +54,7 @@ const (
 func getTracer() trace.Tracer {
 	tracerProvider := otel.GetTracerProvider()
 	if tracerProvider == nil {
-		return trace.NewNoopTracerProvider().Tracer(tracerName)
+		return noop.NewTracerProvider().Tracer(tracerName)
 	}
 	return tracerProvider.Tracer(tracerName)
 }
