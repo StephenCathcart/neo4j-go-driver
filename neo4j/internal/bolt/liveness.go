@@ -1,0 +1,50 @@
+/*
+ * Copyright (c) "Neo4j"
+ * Neo4j Sweden AB [https://neo4j.com]
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package bolt
+
+import (
+	"errors"
+	"io"
+	"os"
+	"time"
+)
+
+const (
+	// peerProbeTimeout bounds the read when nothing is known to be waiting.
+	peerProbeTimeout = 10 * time.Microsecond
+	// peerClassifyTimeout bounds the read when bytes are waiting; a TLS record takes several reads.
+	peerClassifyTimeout = 10 * time.Millisecond
+)
+
+func peerAlive(conn io.ReadWriteCloser) bool {
+	if c, ok := conn.(*socketConnection); ok {
+		return c.peerAlive()
+	}
+	return true
+}
+
+// Peek leaves a waiting byte for the next read; tls.Conn decodes a close_notify to io.EOF.
+func (c *socketConnection) peerAliveByRead(timeout time.Duration) bool {
+	if c.reader == nil {
+		return true
+	}
+	_ = c.SetReadDeadline(time.Now().Add(timeout))
+	defer c.SetReadDeadline(time.Time{})
+	_, err := c.reader.Peek(1)
+	return err == nil || errors.Is(err, os.ErrDeadlineExceeded)
+}

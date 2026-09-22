@@ -133,6 +133,8 @@ type Config struct {
 	// By default, no liveliness check is performed. A value of 0 ensures connections are always tested for
 	// validity, and negative values are not permitted.
 	//
+	// Connections the server has closed while idle in the pool are discarded regardless of this setting.
+	//
 	// default: pool.DefaultConnectionLivenessCheckTimeout
 	ConnectionLivenessCheckTimeout time.Duration
 	// Connect timeout that will be set on underlying sockets. Values less than

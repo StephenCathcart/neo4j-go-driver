@@ -31,23 +31,25 @@ import (
 // DefaultReadBufferSize specifies the default size (in bytes) of the buffer used for reading data from the network connection.
 const DefaultReadBufferSize = 8192
 
-func bufferedConnection(conn net.Conn, readBufferSize int) io.ReadWriteCloser {
-	var reader io.Reader
-	if readBufferSize > 0 {
-		reader = bufio.NewReaderSize(conn, readBufferSize)
-	} else {
-		reader = conn
-	}
+// socketConnection keeps the net.Conn reachable beneath the read buffer.
+type socketConnection struct {
+	net.Conn
+	reader *bufio.Reader // nil when read buffering is off
+}
 
-	return struct {
-		io.Reader
-		io.Writer
-		io.Closer
-	}{
-		Reader: reader,
-		Writer: conn,
-		Closer: conn,
+func (c *socketConnection) Read(p []byte) (int, error) {
+	if c.reader != nil {
+		return c.reader.Read(p)
 	}
+	return c.Conn.Read(p)
+}
+
+func bufferedConnection(conn net.Conn, readBufferSize int) io.ReadWriteCloser {
+	c := &socketConnection{Conn: conn}
+	if readBufferSize > 0 {
+		c.reader = bufio.NewReaderSize(conn, readBufferSize)
+	}
+	return c
 }
 
 type ConnectionErrorListener interface {
