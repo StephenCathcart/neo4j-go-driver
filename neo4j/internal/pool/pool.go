@@ -329,6 +329,9 @@ func (p *Pool) tryBorrow(
 				p.log.Debugf(log.Pool, p.logId, "Health check failed for %s: %s", serverName, err)
 				return nil, err
 			}
+			p.log.Debugf(
+				log.Pool, p.logId,
+				"Discarding connection %s to %s, no longer usable", connection.ConnId(), serverName)
 			p.serversMut.Lock()
 			*unlock = sync.Once{}
 			srv = p.servers[serverName]

@@ -19,6 +19,7 @@ package testutil
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/neo4j/neo4j-go-driver/v6/neo4j/auth"
@@ -52,6 +53,8 @@ type ConnFake struct {
 	Name                    string
 	ConnectionVersion       idb.ProtocolVersion
 	Alive                   bool
+	peerDead                atomic.Bool
+	closes                  atomic.Int32
 	Birth                   time.Time
 	Table                   *idb.RoutingTable
 	Err                     error
@@ -112,6 +115,16 @@ func (c *ConnFake) HasFailed() bool {
 	return false
 }
 
+func (c *ConnFake) IsPeerAlive() bool {
+	return !c.peerDead.Load()
+}
+
+// KillPeer marks the connection as one the server has closed. Safe to call
+// from another goroutine, which is what a concurrency test needs.
+func (c *ConnFake) KillPeer() {
+	c.peerDead.Store(true)
+}
+
 func (c *ConnFake) Reset(context.Context) {
 }
 
@@ -121,6 +134,13 @@ func (c *ConnFake) ForceReset(context.Context) {
 
 func (c *ConnFake) Close(ctx context.Context) {
 	c.Closed = true
+	c.closes.Add(1)
+}
+
+// CloseCount is the race-safe counterpart of Closed, for tests that observe a
+// close the pool performs on its own goroutine.
+func (c *ConnFake) CloseCount() int32 {
+	return c.closes.Load()
 }
 
 func (c *ConnFake) Birthdate() time.Time {
