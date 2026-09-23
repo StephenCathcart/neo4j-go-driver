@@ -174,7 +174,12 @@ func (r *exampleKeyRepository) SetAlias(_ context.Context, id, alias string) err
 }
 
 func (r *exampleKeyRepository) DeleteByID(_ context.Context, id string) error {
+	record, ok := r.keys[id]
+	if !ok {
+		return propertyencryption.ErrKeyNotFound
+	}
 	delete(r.keys, id)
+	delete(r.aliases, record.Alias)
 	return nil
 }
 
