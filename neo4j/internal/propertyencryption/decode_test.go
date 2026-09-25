@@ -61,15 +61,17 @@ func TestRoundTrip(t *testing.T) {
 		{name: "list", value: []any{int64(1), int64(2)}},
 		{name: "list of strings", value: []string{"a", "b"}, want: []any{"a", "b"}},
 		{name: "long list", value: longList(), want: longListDecoded()},
-		{
-			name:  "mixed list",
-			value: []any{int64(1), "a", true},
-			want:  []any{int64(1), "a", true},
-		},
 		{name: "uuid", value: dbtype.UUID{1, 2, 3}},
 		{name: "duration", value: dbtype.Duration{Months: 1, Days: 2, Seconds: 3, Nanos: 4}},
 		{name: "negative duration", value: dbtype.Duration{Months: -1, Days: -2, Seconds: -3, Nanos: 4}},
 		{name: "point 2d", value: dbtype.Point2D{SpatialRefId: 7203, X: 1.5, Y: -2.5}},
+		{
+			name: "list of points that agree",
+			value: []any{
+				dbtype.Point2D{SpatialRefId: 7203, X: 1.5, Y: -2.5},
+				dbtype.Point2D{SpatialRefId: 7203, X: 3, Y: 4},
+			},
+		},
 		{name: "point 3d", value: dbtype.Point3D{SpatialRefId: 9157, X: 1.5, Y: -2.5, Z: 0}},
 		{name: "vector int8", value: dbtype.Vector[int8]{Elems: []int8{1, -1, 127}}},
 		{name: "vector int16", value: dbtype.Vector[int16]{Elems: []int16{1, -32768}}},

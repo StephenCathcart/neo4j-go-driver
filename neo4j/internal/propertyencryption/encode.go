@@ -59,7 +59,7 @@ var aadTypeBaselines = func() map[string]Version {
 func encode(value any, permitted map[string]Version) (Encoded, error) {
 	e := encoder{permitted: permitted}
 	e.packer.Begin(make([]byte, 0, 64))
-	typeName := e.value(value, false)
+	kind := e.value(value, false)
 	buf, packErr := e.packer.End()
 	if e.err != nil {
 		return Encoded{}, e.err
@@ -67,7 +67,15 @@ func encode(value any, permitted map[string]Version) (Encoded, error) {
 	if packErr != nil {
 		return Encoded{}, packErr
 	}
-	return Encoded{Bytes: buf, TypeName: typeName, Baseline: e.baseline}, nil
+	return Encoded{Bytes: buf, TypeName: kind.typeName, Baseline: e.baseline}, nil
+}
+
+// elemKind is what the elements of one list must agree on. A list stored as a property is
+// homogeneous, and its points must share a coordinate reference system and dimensions.
+type elemKind struct {
+	typeName   string
+	srid       uint32
+	dimensions int
 }
 
 type encoder struct {
@@ -99,16 +107,16 @@ func (e *encoder) accept(typeName string) bool {
 	return true
 }
 
-// value encodes a single value and returns its property type name. inList restricts it to
-// the types a Neo4j list may hold.
-func (e *encoder) value(x any, inList bool) string {
+// value encodes a single value and returns what a list would need it to agree on. inList
+// restricts it to the types a Neo4j list may hold.
+func (e *encoder) value(x any, inList bool) elemKind {
 	if e.err != nil {
-		return ""
+		return elemKind{}
 	}
 	if x == nil {
 		if inList {
 			e.setErr("a list stored as a property cannot contain null")
-			return ""
+			return elemKind{}
 		}
 		return e.pack(TypeNull, e.packer.Nil)
 	}
@@ -159,9 +167,9 @@ func (e *encoder) value(x any, inList bool) string {
 	case dbtype.Duration:
 		return e.pack(TypeDuration, func() { e.packDuration(v) })
 	case dbtype.Point2D:
-		return e.pack(TypePoint, func() { e.packPoint2D(v) })
+		return e.packPoint(v.SpatialRefId, 2, func() { e.packPoint2D(v) })
 	case dbtype.Point3D:
-		return e.pack(TypePoint, func() { e.packPoint3D(v) })
+		return e.packPoint(v.SpatialRefId, 3, func() { e.packPoint3D(v) })
 	case dbtype.Vector[int8]:
 		return e.packVector(inList, func() { e.packer.VectorInt8(v.Elems) })
 	case dbtype.Vector[int16]:
@@ -180,7 +188,7 @@ func (e *encoder) value(x any, inList bool) string {
 }
 
 // reflected handles pointers and slices.
-func (e *encoder) reflected(x any, inList bool) string {
+func (e *encoder) reflected(x any, inList bool) elemKind {
 	rv := reflect.ValueOf(x)
 	switch rv.Kind() {
 	case reflect.Pointer:
@@ -191,45 +199,71 @@ func (e *encoder) reflected(x any, inList bool) string {
 	case reflect.Slice:
 		if inList {
 			e.setErr("a list stored as a property cannot contain another list")
-			return ""
+			return elemKind{}
 		}
 		if !e.accept(TypeList) {
-			return ""
+			return elemKind{}
 		}
 		e.packer.ArrayHeader(rv.Len())
+		var first elemKind
 		for i := 0; i < rv.Len(); i++ {
-			e.value(rv.Index(i).Interface(), true)
+			kind := e.value(rv.Index(i).Interface(), true)
 			if e.err != nil {
-				return ""
+				return elemKind{}
+			}
+			switch {
+			case i == 0:
+				first = kind
+			case kind != first:
+				e.mixed(first, kind)
+				return elemKind{}
 			}
 		}
-		return TypeList
+		return elemKind{typeName: TypeList}
 	default:
 		e.setErr("%s is not a Neo4j property type", reflect.TypeOf(x))
-		return ""
+		return elemKind{}
 	}
 }
 
-func (e *encoder) pack(typeName string, write func()) string {
+// mixed reports two elements a list cannot hold together.
+func (e *encoder) mixed(first, got elemKind) {
+	if first.typeName != got.typeName {
+		e.setErr("a list stored as a property cannot mix %s and %s", first.typeName, got.typeName)
+		return
+	}
+	e.setErr("points in a list stored as a property must have the same coordinate reference " +
+		"system and dimensions")
+}
+
+func (e *encoder) pack(typeName string, write func()) elemKind {
 	if !e.accept(typeName) {
-		return ""
+		return elemKind{}
 	}
 	write()
-	return typeName
+	return elemKind{typeName: typeName}
 }
 
-func (e *encoder) packInt(i int64) string {
+func (e *encoder) packPoint(srid uint32, dimensions int, write func()) elemKind {
+	if !e.accept(TypePoint) {
+		return elemKind{}
+	}
+	write()
+	return elemKind{typeName: TypePoint, srid: srid, dimensions: dimensions}
+}
+
+func (e *encoder) packInt(i int64) elemKind {
 	return e.pack(TypeInteger, func() { e.packer.Int64(i) })
 }
 
-func (e *encoder) packUint(u uint64) string {
+func (e *encoder) packUint(u uint64) elemKind {
 	return e.pack(TypeInteger, func() { e.packer.Uint64(u) })
 }
 
-func (e *encoder) packVector(inList bool, write func()) string {
+func (e *encoder) packVector(inList bool, write func()) elemKind {
 	if inList {
 		e.setErr("a list stored as a property cannot contain a vector")
-		return ""
+		return elemKind{}
 	}
 	return e.pack(TypeVector, write)
 }

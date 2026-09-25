@@ -20,6 +20,7 @@ package propertyencryption
 import (
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -207,6 +208,28 @@ func TestEncodeValueRejects(t *testing.T) {
 		{name: "list in a list", value: []any{[]any{1}}},
 		{name: "vector in a list", value: []any{dbtype.Vector[int8]{Elems: []int8{1}}}},
 		{name: "map in a list", value: []any{map[string]any{}}},
+		{name: "mixed list", value: []any{int64(1), "a"}},
+		{
+			name: "local and zoned times in a list",
+			value: []any{
+				dbtype.LocalTime(time.Date(0, 0, 0, 1, 0, 0, 0, time.UTC)),
+				dbtype.Time(time.Date(0, 0, 0, 1, 0, 0, 0, offsetZone)),
+			},
+		},
+		{
+			name: "points of different dimensions in a list",
+			value: []any{
+				dbtype.Point2D{SpatialRefId: 7203, X: 1, Y: 1},
+				dbtype.Point3D{SpatialRefId: 7203, X: 1, Y: 1, Z: 1},
+			},
+		},
+		{
+			name: "points of different coordinate systems in a list",
+			value: []any{
+				dbtype.Point2D{SpatialRefId: 7203, X: 1, Y: 1},
+				dbtype.Point2D{SpatialRefId: 4326, X: 1, Y: 1},
+			},
+		},
 		{name: "uint64 beyond int64", value: uint64(1) << 63},
 	}
 
@@ -216,6 +239,50 @@ func TestEncodeValueRejects(t *testing.T) {
 
 			if _, err := EncodeValue(test.value); err == nil {
 				t.Fatalf("EncodeValue(%#v) succeeded, want an error", test.value)
+			}
+		})
+	}
+}
+
+// TestEncodeValueSaysWhyAListIsRejected checks a mixed list is not blamed on its points.
+func TestEncodeValueSaysWhyAListIsRejected(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{
+			name:  "unrelated types",
+			value: []any{int64(1), "a"},
+			want:  "cannot mix INTEGER and STRING",
+		},
+		{
+			name:  "null",
+			value: []any{int64(1), nil},
+			want:  "cannot contain null",
+		},
+		{
+			name: "points",
+			value: []any{
+				dbtype.Point2D{SpatialRefId: 7203, X: 1, Y: 1},
+				dbtype.Point2D{SpatialRefId: 4326, X: 1, Y: 1},
+			},
+			want: "same coordinate reference system and dimensions",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := EncodeValue(test.value)
+			if err == nil {
+				t.Fatal("EncodeValue succeeded, want an error")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Errorf("error is %q, want it to mention %q", err, test.want)
 			}
 		})
 	}
