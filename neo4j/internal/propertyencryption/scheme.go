@@ -44,6 +44,7 @@ const (
 	TypeList          = "LIST"
 	TypeLocalDateTime = "LOCAL DATETIME"
 	TypeLocalTime     = "LOCAL TIME"
+	TypeNull          = "NULL"
 	TypePoint         = "POINT"
 	TypeString        = "STRING"
 	TypeUUID          = "UUID"
@@ -96,6 +97,7 @@ var typeBaselines = map[string]Version{
 	TypeList:          {Major: 1, Minor: 0},
 	TypeLocalDateTime: {Major: 1, Minor: 0},
 	TypeLocalTime:     {Major: 1, Minor: 0},
+	TypeNull:          {Major: 1, Minor: 0},
 	TypePoint:         {Major: 1, Minor: 0},
 	TypeString:        {Major: 1, Minor: 0},
 	TypeUUID:          {Major: 1, Minor: 0},

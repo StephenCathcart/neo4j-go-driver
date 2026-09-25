@@ -246,6 +246,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 	createKey(t, encryption, "", "k1")
 
 	values := []any{
+		nil,
 		true,
 		int64(-42),
 		3.25,
@@ -480,7 +481,6 @@ func TestEncryptRejects(t *testing.T) {
 		{name: "unknown alias", request: EncryptRequest{Value: "a", Key: KeyAlias("nope")}},
 		{name: "unknown id", request: EncryptRequest{Value: "a", Key: KeyID("nope")}},
 		{name: "unknown profile", request: EncryptRequest{Value: "a", Key: KeyAlias("k1"), Profile: "nope"}},
-		{name: "nil value", request: EncryptRequest{Key: KeyAlias("k1")}},
 		{name: "map value", request: EncryptRequest{Value: map[string]any{}, Key: KeyAlias("k1")}},
 	}
 

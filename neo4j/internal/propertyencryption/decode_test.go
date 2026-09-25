@@ -44,6 +44,7 @@ func TestRoundTrip(t *testing.T) {
 	}{
 		{name: "true", value: true},
 		{name: "false", value: false},
+		{name: "null", value: nil},
 		{name: "zero", value: int64(0)},
 		{name: "negative", value: int64(-1)},
 		{name: "int64 min", value: int64(-9223372036854775808)},
@@ -221,7 +222,7 @@ func TestDecodeValueRejectsMalformedPlaintext(t *testing.T) {
 		plaintext string
 	}{
 		{name: "empty", plaintext: ""},
-		{name: "null", plaintext: "c0"},
+		{name: "null in a list", plaintext: "91c0"},
 		{name: "truncated string", plaintext: "8b68656c6c6f"},
 		{name: "truncated list", plaintext: "930102"},
 		{name: "trailing bytes", plaintext: "920102cb"},

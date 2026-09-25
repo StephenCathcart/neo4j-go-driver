@@ -44,6 +44,7 @@ func TestEncodeValueBytes(t *testing.T) {
 	}{
 		{name: "true", value: true, wantHex: "c3", wantType: TypeBoolean},
 		{name: "false", value: false, wantHex: "c2", wantType: TypeBoolean},
+		{name: "null", value: nil, wantHex: "c0", wantType: TypeNull},
 		{name: "zero", value: 0, wantHex: "00", wantType: TypeInteger},
 		{name: "minus one", value: -1, wantHex: "ff", wantType: TypeInteger},
 		{name: "int32 boundary", value: 32768, wantHex: "ca00008000", wantType: TypeInteger},
@@ -162,7 +163,8 @@ func TestEncodeValueUsesUtcDateTimeStructures(t *testing.T) {
 	}
 }
 
-// TestEncodeValueDereferencesPointers checks a pointer encodes as the value it points at.
+// TestEncodeValueDereferencesPointers checks a pointer encodes as the value it points at,
+// and a nil pointer as null.
 func TestEncodeValueDereferencesPointers(t *testing.T) {
 	t.Parallel()
 
@@ -174,20 +176,28 @@ func TestEncodeValueDereferencesPointers(t *testing.T) {
 	if got := hex.EncodeToString(encoded.Bytes); got != "8b68656c6c6f20776f726c64" {
 		t.Errorf("encoded to %s", got)
 	}
+
+	var nilPointer *string
+	encoded, err = EncodeValue(nilPointer)
+	if err != nil {
+		t.Fatalf("EncodeValue(nil pointer) returned %v", err)
+	}
+	if got := hex.EncodeToString(encoded.Bytes); got != "c0" {
+		t.Errorf("a nil pointer encoded to %s, want c0", got)
+	}
+	if encoded.TypeName != TypeNull {
+		t.Errorf("a nil pointer typed %q, want %q", encoded.TypeName, TypeNull)
+	}
 }
 
 // TestEncodeValueRejects covers values that are not Neo4j property types.
 func TestEncodeValueRejects(t *testing.T) {
 	t.Parallel()
 
-	var nilPointer *string
-
 	tests := []struct {
 		name  string
 		value any
 	}{
-		{name: "nil", value: nil},
-		{name: "nil pointer", value: nilPointer},
 		{name: "map", value: map[string]any{"a": 1}},
 		{name: "struct", value: struct{ A int }{A: 1}},
 		{name: "channel", value: make(chan int)},

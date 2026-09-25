@@ -108,10 +108,9 @@ func (e *encoder) value(x any, inList bool) string {
 	if x == nil {
 		if inList {
 			e.setErr("a list stored as a property cannot contain null")
-		} else {
-			e.setErr("null is not a Neo4j property type")
+			return ""
 		}
-		return ""
+		return e.pack(TypeNull, e.packer.Nil)
 	}
 
 	switch v := x.(type) {

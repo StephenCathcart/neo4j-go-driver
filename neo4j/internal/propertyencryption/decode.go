@@ -54,7 +54,7 @@ func DecodeValue(plaintext []byte, typeName string, recorded Version) (any, erro
 
 	d := decoder{recorded: recorded}
 	d.unpacker.Reset(plaintext)
-	value := d.value()
+	value := d.value(false)
 	switch {
 	case errors.Is(d.err, errUnsupported):
 		return newUnsupportedType(typeName, recorded,
@@ -146,7 +146,8 @@ func (d *decoder) require(typeName string) bool {
 	return true
 }
 
-func (d *decoder) value() any {
+// value decodes a single value. inList restricts it to the types a Neo4j list may hold.
+func (d *decoder) value(inList bool) any {
 	if d.err != nil {
 		return nil
 	}
@@ -187,7 +188,11 @@ func (d *decoder) value() any {
 	case packstream.PackedStruct:
 		return d.structure()
 	case packstream.PackedNil:
-		d.malformed("null is not a Neo4j property type")
+		if inList {
+			d.malformed("a list stored as a property cannot contain null")
+			return nil
+		}
+		d.require(TypeNull)
 		return nil
 	default:
 		d.unsupported("a PackStream type this driver does not recognise")
@@ -205,7 +210,7 @@ func (d *decoder) list() any {
 	}
 	items := make([]any, 0, min(length, 1024))
 	for i := uint32(0); i < length; i++ {
-		item := d.value()
+		item := d.value(true)
 		if d.err != nil {
 			return nil
 		}
