@@ -53,12 +53,6 @@ jobs:
           grep -- '--- FAIL' mutated.txt
           test "$(grep -c -- '--- FAIL' mutated.txt)" -gt 0
 
-      - name: Spike measurements
-        shell: bash
-        run: |
-          go test -count=1 -v -run Spike ./neo4j/internal/bolt/
-          go test -run XXX -bench Spike -benchtime 20000x -count 2 ./neo4j/internal/bolt/
-
       - name: 6.x worktree
         shell: bash
         run: |
