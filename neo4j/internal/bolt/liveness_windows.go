@@ -20,8 +20,8 @@
 package bolt
 
 import (
+	"encoding/binary"
 	"syscall"
-	"unsafe"
 )
 
 // Winsock values syscall does not export.
@@ -31,8 +31,7 @@ const (
 	fionbio           uint32        = 0x8004667e
 )
 
-// The socket blocks (Go uses overlapped I/O on Windows), so it is switched to
-// non-blocking around the peek. Overlapped reads and writes ignore the mode.
+// The socket blocks, so it is non-blocking for the peek only.
 func peekSocket(fd uintptr) (int, error) {
 	if err := setNonblocking(fd, true); err != nil {
 		return 0, err
@@ -46,10 +45,10 @@ func peekSocket(fd uintptr) (int, error) {
 }
 
 func setNonblocking(fd uintptr, on bool) error {
-	var mode uint32
+	var mode [4]byte // u_long, host order
 	if on {
-		mode = 1
+		binary.NativeEndian.PutUint32(mode[:], 1)
 	}
 	var ret uint32
-	return syscall.WSAIoctl(syscall.Handle(fd), fionbio, (*byte)(unsafe.Pointer(&mode)), 4, nil, 0, &ret, nil, 0)
+	return syscall.WSAIoctl(syscall.Handle(fd), fionbio, &mode[0], 4, nil, 0, &ret, nil, 0)
 }
