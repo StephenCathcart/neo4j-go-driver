@@ -99,6 +99,7 @@ jobs:
           Invoke-WebRequest https://dist.neo4j.org/neo4j-community-2025.04.0-windows.zip -OutFile neo4j.zip
           Expand-Archive neo4j.zip -DestinationPath $env:RUNNER_TEMP
           $home4j = Join-Path $env:RUNNER_TEMP neo4j-community-2025.04.0
+          "NEO4J_HOME_DIR=$home4j" | Out-File -FilePath $env:GITHUB_ENV -Append
           & "$home4j\bin\neo4j-admin.bat" dbms set-initial-password password
           Start-Process -FilePath "$home4j\bin\neo4j.bat" -ArgumentList console -RedirectStandardOutput "$env:RUNNER_TEMP\neo4j.out" -RedirectStandardError "$env:RUNNER_TEMP\neo4j.err"
           for ($i = 0; $i -lt 90; $i++) {
@@ -107,6 +108,55 @@ jobs:
           }
           Get-Content "$env:RUNNER_TEMP\neo4j.out" -Tail 50
           exit 1
+
+      - name: Neo4j answers queries
+        run: |
+          for ($i = 0; $i -lt 60; $i++) {
+            & "$env:NEO4J_HOME_DIR\bin\cypher-shell.bat" -a neo4j://localhost:7687 -u neo4j -p password "CALL dbms.components() YIELD versions RETURN versions"
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep 2
+          }
+          exit 1
+
+      - name: Driver connects, PR and 6.x
+        shell: bash
+        run: |
+          mkdir -p zzcheck
+          cat > zzcheck/main.go <<'EOF2'
+          package main
+
+          import (
+          	"context"
+          	"fmt"
+          	"os"
+
+          	"github.com/neo4j/neo4j-go-driver/v6/neo4j"
+          )
+
+          func main() {
+          	ctx := context.Background()
+          	for _, uri := range []string{"neo4j://localhost:7687", "bolt://localhost:7687", "neo4j://127.0.0.1:7687"} {
+          		d, err := neo4j.NewDriver(uri, neo4j.BasicAuth("neo4j", "password", ""))
+          		if err != nil {
+          			fmt.Println(uri, "driver:", err)
+          			os.Exit(1)
+          		}
+          		for i := 0; i < 3; i++ {
+          			r, err := neo4j.ExecuteQuery(ctx, d, "CALL dbms.components() YIELD versions RETURN versions[0] AS v", nil, neo4j.EagerResultTransformer)
+          			if err != nil {
+          				fmt.Println(uri, "query", i, "error:", err)
+          				continue
+          			}
+          			v, _ := r.Records[0].Get("v")
+          			fmt.Println(uri, "query", i, "ok:", v)
+          		}
+          		_ = d.Close(ctx)
+          	}
+          }
+          EOF2
+          echo "== PR"; go run ./zzcheck || true
+          cp -r zzcheck ../six-x/ && echo "== 6.x" && (cd ../six-x && go run ./zzcheck || true)
+          rm -rf zzcheck ../six-x/zzcheck
 
       - name: Server closes idle connections, PR
         run: go test -count=3 -v -run TestConnectionClosedByServer ./neo4j/test-integration/
