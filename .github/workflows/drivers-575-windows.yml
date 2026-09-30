@@ -30,13 +30,32 @@ jobs:
         run: |
           go version
           go env GOOS GOARCH
-          go list -f '{{.GoFiles}}' ./neo4j/internal/bolt/ | Select-String liveness
+          go list -f '{{.GoFiles}} {{.TestGoFiles}}' ./neo4j/internal/bolt/ | Select-String liveness
 
       - name: Liveness unit tests
         run: go test -count=1 -v -run 'PeerAlive|IsPeerAlive' ./neo4j/internal/bolt/
 
       - name: Liveness unit tests, 50 runs
         run: go test -count=50 -run 'PeerAlive|IsPeerAlive' ./neo4j/internal/bolt/
+
+      - name: Liveness tests fail when the Windows peek is broken
+        shell: bash
+        run: |
+          f=neo4j/internal/bolt/liveness_windows.go
+          test "$(grep -c 'return int(n), err$' $f)" = 1
+          sed -i 's/return int(n), err$/return 0, errNothingWaiting/' $f
+          git diff --stat
+          go test -count=1 -run 'PeerAlive|IsPeerAlive' ./neo4j/internal/bolt/ > mutated.txt 2>&1 || true
+          git checkout -- $f
+          echo "subtests failing with the peek broken: $(grep -c -- '--- FAIL' mutated.txt)"
+          grep -- '--- FAIL' mutated.txt
+          test "$(grep -c -- '--- FAIL' mutated.txt)" -gt 0
+
+      - name: Spike measurements
+        shell: bash
+        run: |
+          go test -count=1 -v -run Spike ./neo4j/internal/bolt/
+          go test -run XXX -bench Spike -benchtime 20000x -count 2 ./neo4j/internal/bolt/
 
       - name: 6.x worktree
         shell: bash
