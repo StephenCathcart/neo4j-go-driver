@@ -94,33 +94,21 @@ jobs:
           go test -run XXX -bench PeerAliveOpen -benchtime 20000x -count 3 ./neo4j/internal/bolt/
           rm neo4j/internal/bolt/zz_bench_test.go
 
-      - name: Start Neo4j
-        run: |
-          Invoke-WebRequest https://dist.neo4j.org/neo4j-community-2025.04.0-windows.zip -OutFile neo4j.zip
-          Expand-Archive neo4j.zip -DestinationPath $env:RUNNER_TEMP
-          $home4j = Join-Path $env:RUNNER_TEMP neo4j-community-2025.04.0
-          "NEO4J_HOME_DIR=$home4j" | Out-File -FilePath $env:GITHUB_ENV -Append
-          & "$home4j\bin\neo4j-admin.bat" dbms set-initial-password password
-          Start-Process -FilePath "$home4j\bin\neo4j.bat" -ArgumentList console -RedirectStandardOutput "$env:RUNNER_TEMP\neo4j.out" -RedirectStandardError "$env:RUNNER_TEMP\neo4j.err"
-          for ($i = 0; $i -lt 90; $i++) {
-            if ((Test-NetConnection localhost -Port 7687 -WarningAction SilentlyContinue).TcpTestSucceeded) { "bolt up"; exit 0 }
-            Start-Sleep 2
-          }
-          Get-Content "$env:RUNNER_TEMP\neo4j.out" -Tail 50
-          exit 1
-
-      - name: Neo4j answers queries
-        run: |
-          for ($i = 0; $i -lt 60; $i++) {
-            & "$env:NEO4J_HOME_DIR\bin\cypher-shell.bat" -a neo4j://localhost:7687 -u neo4j -p password "CALL dbms.components() YIELD versions RETURN versions"
-            if ($LASTEXITCODE -eq 0) { exit 0 }
-            Start-Sleep 2
-          }
-          exit 1
-
-      - name: Driver connects, PR and 6.x
+      - name: Neo4j, driver check and integration tests (one step, so the server stays up)
         shell: bash
         run: |
+          set -u
+          curl -sSL -o neo4j.zip https://dist.neo4j.org/neo4j-community-2025.04.0-windows.zip
+          pwsh -NoProfile -Command "Expand-Archive neo4j.zip -DestinationPath '$RUNNER_TEMP'"
+          N="$RUNNER_TEMP/neo4j-community-2025.04.0"
+          "$N/bin/neo4j-admin.bat" dbms set-initial-password password
+          "$N/bin/neo4j.bat" console > "$RUNNER_TEMP/neo4j.out" 2>&1 &
+          for i in $(seq 1 60); do
+            "$N/bin/cypher-shell.bat" -a neo4j://localhost:7687 -u neo4j -p password "RETURN 1" > /dev/null 2>&1 && { echo "neo4j answers queries"; break; }
+            sleep 2
+          done
+          "$N/bin/cypher-shell.bat" -a neo4j://localhost:7687 -u neo4j -p password "CALL dbms.components() YIELD versions RETURN versions"
+
           mkdir -p zzcheck
           cat > zzcheck/main.go <<'EOF2'
           package main
@@ -154,21 +142,19 @@ jobs:
           	}
           }
           EOF2
-          echo "== PR"; go run ./zzcheck || true
-          cp -r zzcheck ../six-x/ && echo "== 6.x" && (cd ../six-x && go run ./zzcheck || true)
+          echo "== driver check, PR"; go run ./zzcheck
+          cp -r zzcheck ../six-x/
+          echo "== driver check, 6.x"; (cd ../six-x && go run ./zzcheck)
           rm -rf zzcheck ../six-x/zzcheck
 
-      - name: Server closes idle connections, PR
-        run: go test -count=3 -v -run TestConnectionClosedByServer ./neo4j/test-integration/
+          echo "== integration test, PR"
+          go test -count=3 -v -run TestConnectionClosedByServer ./neo4j/test-integration/ | tee it-pr.txt
+          pr_ok=$(grep -c -- "--- PASS: TestConnectionClosedByServer " it-pr.txt || true)
 
-      - name: Server closes idle connections, 6.x (must fail)
-        shell: bash
-        run: |
-          cd ../six-x
-          go test -count=1 -v -run TestConnectionClosedByServer ./neo4j/test-integration/ | tee ../it-6x.txt || true
-          grep -q -- "--- FAIL: TestConnectionClosedByServer" ../it-6x.txt || { echo "6.x did not fail the test"; exit 1; }
-          echo "6.x failed as expected"
+          echo "== integration test, 6.x"
+          (cd ../six-x && go test -count=1 -v -run TestConnectionClosedByServer ./neo4j/test-integration/) | tee it-6x.txt || true
+          six_fail=$(grep -c -- "--- FAIL: TestConnectionClosedByServer " it-6x.txt || true)
 
-      - name: Neo4j log
-        if: always()
-        run: Get-Content "$env:RUNNER_TEMP\neo4j.out" -Tail 40 -ErrorAction SilentlyContinue
+          echo "PR passes: $pr_ok of 3, 6.x fails: $six_fail of 1"
+          echo "== neo4j log"; tail -15 "$RUNNER_TEMP/neo4j.out"
+          test "$pr_ok" = 3 && test "$six_fail" = 1
