@@ -38,8 +38,28 @@ jobs:
       - name: Liveness unit tests, 50 runs
         run: go test -count=50 -run 'PeerAlive|IsPeerAlive' ./neo4j/internal/bolt/
 
-      - name: Bolt and pool packages
-        run: go test -count=1 ./neo4j/internal/bolt/ ./neo4j/internal/pool/
+      - name: 6.x worktree
+        shell: bash
+        run: |
+          git fetch -q https://github.com/neo4j/neo4j-go-driver.git ef40a44232d4b4a3bfa1e7d1ab25f9a103561dc1
+          git worktree add -q ../six-x ef40a44232d4b4a3bfa1e7d1ab25f9a103561dc1
+          cp neo4j/test-integration/closed_by_server_test.go ../six-x/neo4j/test-integration/
+          test ! -e ../six-x/neo4j/internal/bolt/liveness.go
+
+      - name: Bolt and pool packages, PR and 6.x
+        shell: bash
+        run: |
+          fails() { grep -E -- "--- FAIL: " | sed -E 's/^ *--- FAIL: ([^ ]+).*/\1/' | sort -u; }
+          go test -count=3 -v ./neo4j/internal/bolt/ ./neo4j/internal/pool/ > pr.txt 2>&1 || true
+          (cd ../six-x && go test -count=3 -v ./neo4j/internal/bolt/ ./neo4j/internal/pool/ > ../six-x.txt 2>&1 || true)
+          fails < pr.txt > pr-fails.txt
+          fails < ../six-x.txt > six-fails.txt
+          echo "PR package results:"; grep -E "^(ok|FAIL)\s" pr.txt
+          echo "6.x package results:"; grep -E "^(ok|FAIL)\s" ../six-x.txt
+          echo "failing on PR: $(wc -l < pr-fails.txt), failing on 6.x: $(wc -l < six-fails.txt)"
+          echo "failing on PR only:"; comm -23 pr-fails.txt six-fails.txt
+          echo "failing on 6.x only:"; comm -13 pr-fails.txt six-fails.txt
+          echo "failing on both:"; comm -12 pr-fails.txt six-fails.txt
 
       - name: Cost of the check on an open connection
         shell: bash
@@ -94,13 +114,9 @@ jobs:
       - name: Server closes idle connections, 6.x (must fail)
         shell: bash
         run: |
-          git fetch -q https://github.com/neo4j/neo4j-go-driver.git ef40a44232d4b4a3bfa1e7d1ab25f9a103561dc1
-          git restore --source=ef40a44232d4b4a3bfa1e7d1ab25f9a103561dc1 --worktree -- neo4j/internal neo4j/config
-          git status --short
-          test ! -e neo4j/internal/bolt/liveness.go
-          go vet ./neo4j/test-integration/
-          go test -count=1 -v -run TestConnectionClosedByServer ./neo4j/test-integration/ | tee it-6x.txt || true
-          grep -q -- "--- FAIL: TestConnectionClosedByServer" it-6x.txt || { echo "6.x did not fail the test"; exit 1; }
+          cd ../six-x
+          go test -count=1 -v -run TestConnectionClosedByServer ./neo4j/test-integration/ | tee ../it-6x.txt || true
+          grep -q -- "--- FAIL: TestConnectionClosedByServer" ../it-6x.txt || { echo "6.x did not fail the test"; exit 1; }
           echo "6.x failed as expected"
 
       - name: Neo4j log
