@@ -1,0 +1,108 @@
+name: DRIVERS-575 windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/DRIVERS-575-windows]
+
+jobs:
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.6
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Platform
+        run: |
+          go version
+          go env GOOS GOARCH
+          go list -f '{{.GoFiles}}' ./neo4j/internal/bolt/ | Select-String liveness
+
+      - name: Liveness unit tests
+        run: go test -count=1 -v -run 'PeerAlive|IsPeerAlive' ./neo4j/internal/bolt/
+
+      - name: Liveness unit tests, 50 runs
+        run: go test -count=50 -run 'PeerAlive|IsPeerAlive' ./neo4j/internal/bolt/
+
+      - name: Bolt and pool packages
+        run: go test -count=1 ./neo4j/internal/bolt/ ./neo4j/internal/pool/
+
+      - name: Cost of the check on an open connection
+        shell: bash
+        run: |
+          cat > neo4j/internal/bolt/zz_bench_test.go <<'EOF'
+          package bolt
+
+          import "testing"
+
+          func BenchmarkPeerAliveOpenTCP(b *testing.B) {
+          	client, _ := tcpPair(&testing.T{})
+          	c := socket(client)
+          	b.ResetTimer()
+          	for i := 0; i < b.N; i++ {
+          		if !c.peerAlive() {
+          			b.Fatal("reported closed")
+          		}
+          	}
+          }
+
+          func BenchmarkPeerAliveOpenTLS(b *testing.B) {
+          	client, _ := tlsPair(&testing.T{})
+          	c := socket(client)
+          	b.ResetTimer()
+          	for i := 0; i < b.N; i++ {
+          		if !c.peerAlive() {
+          			b.Fatal("reported closed")
+          		}
+          	}
+          }
+          EOF
+          go test -run XXX -bench PeerAliveOpen -benchtime 20000x -count 3 ./neo4j/internal/bolt/
+          rm neo4j/internal/bolt/zz_bench_test.go
+
+      - name: Start Neo4j
+        run: |
+          Invoke-WebRequest https://dist.neo4j.org/neo4j-community-2025.04.0-windows.zip -OutFile neo4j.zip
+          Expand-Archive neo4j.zip -DestinationPath $env:RUNNER_TEMP
+          $home4j = Join-Path $env:RUNNER_TEMP neo4j-community-2025.04.0
+          & "$home4j\bin\neo4j-admin.bat" dbms set-initial-password password
+          Start-Process -FilePath "$home4j\bin\neo4j.bat" -ArgumentList console -RedirectStandardOutput "$env:RUNNER_TEMP\neo4j.out" -RedirectStandardError "$env:RUNNER_TEMP\neo4j.err"
+          for ($i = 0; $i -lt 90; $i++) {
+            if ((Test-NetConnection localhost -Port 7687 -WarningAction SilentlyContinue).TcpTestSucceeded) { "bolt up"; exit 0 }
+            Start-Sleep 2
+          }
+          Get-Content "$env:RUNNER_TEMP\neo4j.out" -Tail 50
+          exit 1
+
+      - name: Server closes idle connections, PR
+        run: go test -count=3 -v -run TestConnectionClosedByServer ./neo4j/test-integration/
+
+      - name: Server closes idle connections, 6.x (must fail)
+        shell: bash
+        run: |
+          git fetch -q https://github.com/neo4j/neo4j-go-driver.git ef40a44232d4b4a3bfa1e7d1ab25f9a103561dc1
+          git restore --source=ef40a44232d4b4a3bfa1e7d1ab25f9a103561dc1 --worktree -- neo4j/internal neo4j/config
+          git status --short
+          test ! -e neo4j/internal/bolt/liveness.go
+          go vet ./neo4j/test-integration/
+          go test -count=1 -v -run TestConnectionClosedByServer ./neo4j/test-integration/ | tee it-6x.txt || true
+          grep -q -- "--- FAIL: TestConnectionClosedByServer" it-6x.txt || { echo "6.x did not fail the test"; exit 1; }
+          echo "6.x failed as expected"
+
+      - name: Neo4j log
+        if: always()
+        run: Get-Content "$env:RUNNER_TEMP\neo4j.out" -Tail 40 -ErrorAction SilentlyContinue
